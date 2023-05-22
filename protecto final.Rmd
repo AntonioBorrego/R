@@ -1,0 +1,561 @@
+---
+title: "proyecto final de R"
+author: "Antonio Borrego Hernández"
+date: "2023-03-31"
+output: html_document
+---
+
+install.packages("dplyr")
+
+install.packages("ggplot2")
+
+install.packages("readxl")
+
+install.packages("gmodels")
+
+install.packages("Hmisc")
+
+install.packages("ggthemes")
+
+install.packages("graphics")
+
+install.packages("base")
+```{r}
+suppressWarnings({
+  library(dplyr)
+  
+  library(ggplot2) 
+  
+  library(readxl)
+  
+  library(gmodels)
+  
+  library(Hmisc)
+  
+  library(ggthemes)
+  
+  library(graphics)
+  
+  library(base)
+  
+  library(glmnet)
+  
+  library(Matrix)
+})
+```
+
+# Cambiar la direccios del csv por la que el ejecutor descargue el archivo
+```{r}
+churn_data <- read.csv("./dataset.csv")
+```
+
+
+```{r }
+str(churn_data)
+```
+```{r }
+summary(churn_data)
+```
+
+```{r}
+
+variables_cuantitativas <- names(churn_data %>% select_if(is.numeric))
+
+variables_cualitativas <- names(churn_data)[sapply(churn_data, is.character)]
+
+variables_cualitativas <- tail(variables_cualitativas, n=-1)
+```
+
+```{r}
+str(variables_cuantitativas)
+str(variables_cualitativas)
+```
+
+```{r}
+suppressWarnings({
+  lapply(variables_cuantitativas, function(variable) {
+    ggplot(churn_data, aes_string(x = variable, fill = "Churn")) +
+      geom_histogram(bins = 30, color = "black", size = 0.2) +
+      labs(x = variable)
+  })
+})
+```
+
+
+```{r}
+lapply(variables_cualitativas, function(variable) {
+
+    ggplot(churn_data, aes_string(x=variable, fill="Churn")) +
+  
+      geom_bar()
+})
+```
+```{r}
+for(variable in variables_cualitativas) {
+  print(
+    ggplot(churn_data, aes(x = churn_data[,variable], y = MonthlyCharges, fill = factor(Churn))) +
+      geom_boxplot() +
+      ggtitle(paste(variable)) +
+      xlab("Valor de la variable") +
+      ylab("MonthlyCharges") +
+      theme(plot.title = element_text(hjust = 0.5)) +
+      scale_color_discrete(name = "Churn") +
+      guides(fill=guide_legend(title="Churn")) +
+      theme_bw() +
+      ylim(range(churn_data$MonthlyCharges))
+  )
+}
+
+```
+
+
+```{r}
+suppressWarnings({
+  # Seleccionar variables predictoras
+  predictors <- c("gender", "SeniorCitizen", "Partner", "Dependents", "tenure",
+                  "PhoneService", "MultipleLines", "InternetService", "OnlineSecurity",
+                  "OnlineBackup", "DeviceProtection", "TechSupport", "StreamingTV",
+                  "StreamingMovies", "Contract", "PaperlessBilling", "PaymentMethod")
+  
+  
+  # Seleccionar variable objetivo
+  monthly_charges_col <- "MonthlyCharges"
+  
+  # Seleccionar tamaño del subconjunto de entrenamiento
+  num_filas <- nrow(churn_data)
+  tam_train <- round(0.8 * num_filas)
+  
+  # Dividir el conjunto de churn en dos subconjuntos de entrenamiento y prueba
+  subconjuntos <- split(churn_data, c(tam_train, num_filas))
+})
+```
+
+```{r}
+churn_train <- subconjuntos[[1]]
+churn_test <- subconjuntos[[2]]
+
+# Seleccionar únicamente las columnas de interés utilizando la función subset()
+train_data <- subset(churn_train, select = c(monthly_charges_col, predictors))
+
+# Ajustar el modelo de regresión multilineal
+modelo <- lm(formula = MonthlyCharges ~ ., data = train_data)
+
+# mostrar los detalles del modelo ajustado
+summary(modelo)
+
+# imprimir los nombres de las variables predictoras en churn_train y churn_test
+print(names(churn_train[, predictors]))
+print(names(churn_test[, predictors]))
+
+# identificar las filas en churn_test que tienen valores faltantes en las variables predictoras
+missing_rows <- is.na(churn_test[, predictors]) & !complete.cases(churn_test[, predictors])
+
+# contar el número de filas con valores faltantes
+sum(missing_rows)
+```
+
+```{r}
+suppressWarnings({
+  # eliminar las filas con valores faltantes en churn_test
+  churn_test <- churn_test[complete.cases(churn_test[, predictors]),]
+  
+  # hacer la predicción con el modelo ajustado a rango completo
+  pred <- predict(modelo, newdata = churn_test)
+})
+```
+
+```{r}
+# Seleccionar las variables significativas a un nivel de significancia del 95%
+significant_vars <- names(which(summary(modelo)$coefficients[,4] < 0.05))
+
+# Mostrar las variables significativas
+cat("Variables significativas: ", paste(significant_vars, collapse = ", "))
+
+# Calcular los costos estimados de los diferentes servicios
+costos <- coef(modelo)[significant_vars]
+costos <- costos[-1]
+names(costos) <- significant_vars[-1]
+cat("\n\nCostos estimados de los diferentes servicios:\n")
+print(costos)
+
+# calcular el RMSE
+MSE <- mean(abs(pred - churn_test$MonthlyCharges)^2)
+RMSE <- sqrt(MSE)
+print(RMSE)
+
+
+```
+
+```{r}
+# recodificar la variable Churn
+churn_train$Churn <- ifelse(churn_train$Churn == "Yes", 1, 0)
+```
+
+```{r}
+# Ajustar modelo de regresión logística
+modelo <- glm(Churn ~ ., data = churn_train[, c(predictors, "Churn")], family = "binomial")
+```
+
+```{r}
+suppressWarnings({
+  # Realizar predicciones sobre los datos de test
+  probs <- predict(modelo, newdata = churn_test, type = "response")
+  
+  churn_pred <- ifelse(probs > 0.5, "Yes", "No")
+})
+```
+
+```{r}
+# Calcular matriz de confusión
+table(churn_pred, churn_test$Churn)
+```
+
+```{r}
+# Calcular matriz de confusión
+conf_mat <- table(churn_pred, churn_test$Churn)
+```
+
+```{r}
+# Calcular precisión global
+accuracy <- sum(diag(conf_mat)) / sum(conf_mat)
+```
+
+```{r}
+# calcular el ratio de los falsos positivos
+FPR <- conf_mat[2, 1] / sum(conf_mat[1, ])
+```
+
+```{r}
+# calcula el ratio de los falsos negativos
+FNR <- conf_mat[1, 2] / sum(conf_mat[2, ])
+```
+
+```{r}
+# calcula el ratio de los verdaderos positivos
+TPR <- conf_mat[2, 2] / sum(conf_mat[2, ])
+```
+
+```{r}
+# Seleccionar las nuevas variables predictoras
+predictors_new <- c("Contract", "tenure", "InternetService")
+```
+
+```{r}
+# Ajustar modelo de regresión logística
+modelo2 <- glm(Churn ~ ., data = churn_train[, c(predictors_new, "Churn")], family = "binomial")
+```
+
+```{r}
+# Realizar predicciones sobre los datos de test
+probs2 <- predict(modelo2, newdata = churn_test, type = "response")
+
+churn_pred2 <- ifelse(probs2 > 0.5, "Yes", "No")
+```
+
+```{r}
+# Calcular matriz de confusión y métricas de evaluación
+confusion_matrix2 <- table(churn_pred2, churn_test$Churn)
+
+```
+
+```{r}
+# calculamos las nuevas metricas
+accuracy2 <- sum(diag(confusion_matrix2)) / sum(confusion_matrix2)
+
+FPR2 <- confusion_matrix2[2, 1] / sum(confusion_matrix2[1, ])
+
+FNR2 <- confusion_matrix2[1, 2] / sum(confusion_matrix2[2, ])
+
+TPR2 <- confusion_matrix2[2, 2] / sum(confusion_matrix2[2, ])
+```
+
+```{r}
+# comparamos ambas metricas
+print(accuracy)
+
+print(accuracy2)
+
+print(FPR)
+
+print(FPR2)
+
+print(FNR)
+
+print(FNR2)
+
+print(TPR)
+
+print(TPR2)
+```
+
+```{r}
+# Definir los valores de umbral
+umbral <- c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)
+```
+
+```{r}
+# Definir el coste del teléfono
+CT <- 100
+```
+
+```{r}
+# Definir la probabilidad de aceptación del teléfono
+AR <- 0.5
+```
+
+```{r}
+# Calcular el consumo medio anual de un cliente
+consumo_medio <- mean(churn_train$MonthlyCharges) * 12
+```
+
+```{r}
+# Calcular el coste de gestión
+coste_gestion <- 50
+```
+
+```{r}
+# Calcular el retorno medio de la retención de un cliente
+R <- consumo_medio - coste_gestion
+```
+
+```{r}
+# Inicializar una matriz para almacenar los resultados
+resultados <- matrix(0, nrow = length(umbral), ncol = 4)
+
+colnames(resultados) <- c("Coste_Total", "Retenciones", "Perdidas", "Rendimiento")
+```
+
+```{r}
+# Evaluar el rendimiento para cada umbral de probabilidad
+for (i in 1:length(umbral)) {
+  
+  # Crear una variable "churn_pred" utilizando el umbral actual
+
+    churn_pred <- ifelse(probs > umbral[i], "Yes", "No")
+  
+  # Calcular la matriz de confusión
+  
+    confusion_matrix <- table(churn_pred, churn_test$Churn)
+  
+  # Calcular el número de clientes que aceptarían la oferta del teléfono
+  
+    clientes_oferta <- sum(churn_pred == "Yes")
+  
+  # Calcular el coste total de la campaña
+  
+    coste_total <- clientes_oferta * CT * AR
+  
+  # Calcular el número de retenciones
+  
+    if ("Yes" %in% churn_pred && "Yes" %in% colnames(confusion_matrix) && "Yes" %in% rownames(confusion_matrix)) {
+    
+      retenciones <- confusion_matrix["Yes","Yes"]
+  
+      } else {
+
+            retenciones <- 0
+  }
+
+  # Calcular las pérdidas
+
+      perdidas <- confusion_matrix[1,2] * R
+  
+  # Calcular el rendimiento de la campaña
+  
+      rendimiento <- retenciones * R - coste_total - perdidas
+  
+  # Almacenar los resultados en el vector correspondiente
+  
+      resultados[i, "Coste_Total"] <- coste_total
+  
+      resultados[i, "Retenciones"] <- retenciones
+
+      resultados[i, "Perdidas"] <- perdidas
+
+      resultados[i, "Rendimiento"] <- rendimiento
+  
+      print(confusion_matrix)
+}
+```
+
+```{r}
+# Encontrar el umbral óptimo que maximiza el rendimiento
+umbral_optimo <- umbral[which.max(resultados[, "Rendimiento"])]
+```
+
+```{r}
+# Mostrar los resultados
+cat("Umbral óptimo:", umbral_optimo, "\n")
+
+cat("Coste total de la campaña:", round(resultados[which.max(resultados[, "Rendimiento"]), "Coste_Total"], 2), "\n")
+
+cat("Número de retenciones:", resultados[which.max(resultados[, "Rendimiento"]), "Retenciones"], "\n")
+
+cat("Pérdidas:", round(resultados[which.max(resultados[, "Rendimiento"]), "Perdidas"], 2), "\n")
+
+cat("Rendimiento:", round(resultados[which.max(resultados[, "Rendimiento"]), "Rendimiento"], 2), "\n")
+```                             
+# caso 1
+```{r}
+I1 <- 200  # Coste del teléfono de regalo
+
+AR1 <- 0.4  # Probabilidad de aceptación de la oferta del teléfono
+
+R1 <- 500  # Coste de retener a un cliente
+
+umbral <- seq(0, 1, by = 0.1)  # Valores de umbral a probar
+
+n_umbral <- length(umbral)  # Número de umbrales a probar
+```
+
+```{r}
+# Inicializar matriz para almacenar los resultados
+resultados1 <- matrix(0, nrow = n_umbral, ncol = 4)
+
+colnames(resultados1) <- c("Coste_Total", "Retenciones", "Perdidas", "Rendimiento")
+```
+
+```{r}
+# Calcular los resultados para cada umbral
+for (i in 1:n_umbral) {
+  
+  # Crear una variable "churn_pred" utilizando el umbral actual
+
+    churn_pred <- ifelse(probs > umbral[i], "Yes", "No")
+  
+  # Calcular la matriz de confusión
+  
+    confusion_matrix <- table(churn_pred, churn_test$Churn)
+  
+  # Calcular el número de clientes que aceptarían la oferta del teléfono
+  
+    clientes_oferta <- sum(churn_pred == "Yes")
+  
+  # Calcular el coste total de la campaña
+  
+    coste_total <- clientes_oferta * I1 * AR1
+  
+  # Calcular el número de retenciones
+  
+    if ("Yes" %in% churn_pred && "Yes" %in% colnames(confusion_matrix) && "Yes" %in% rownames(confusion_matrix)) {
+    
+      retenciones <- confusion_matrix["Yes","Yes"]
+  } 
+    else {
+    
+      retenciones <- 0
+  }
+  
+  # Calcular las pérdidas
+  
+    perdidas <- confusion_matrix[1,2] * R1
+  
+  # Calcular el rendimiento de la campaña
+  
+    rendimiento <- retenciones * R1 - coste_total - perdidas
+  
+  # Almacenar los resultados en el vector correspondiente
+  
+    resultados1[i, "Coste_Total"] <- coste_total
+  
+    resultados1[i, "Retenciones"] <- retenciones
+  
+    resultados1[i, "Perdidas"] <- perdidas
+  
+    resultados1[i, "Rendimiento"] <- rendimiento
+  
+}
+```
+#caso 2
+```{r}
+I2 <- 400  # Coste del teléfono de regalo
+
+AR2 <- 0.8  # Probabilidad de aceptación de la oferta del teléfono
+
+R1 <- 500  # Coste de retener a un cliente
+
+umbral <- seq(0, 1, by = 0.1)  # Valores de umbral a probar
+
+n_umbral <- length(umbral)  # Número de umbrales a probar
+```
+
+```{r}
+# Inicializar matriz para almacenar los resultados
+resultados2 <- matrix(0, nrow = n_umbral, ncol = 4)
+
+colnames(resultados2) <- c("Coste_Total", "Retenciones", "Perdidas", "Rendimiento")
+```
+
+```{r}
+# Calcular los resultados para cada umbral
+for (i in 1:n_umbral) {
+  
+  # Crear una variable "churn_pred" utilizando el umbral actual
+
+    churn_pred <- ifelse(probs > umbral[i], "Yes", "No")
+  
+  # Calcular la matriz de confusión
+  
+    confusion_matrix <- table(churn_pred, churn_test$Churn)
+  
+  # Calcular el número de clientes que aceptarían la oferta del teléfono
+  
+    clientes_oferta <- sum(churn_pred == "Yes")
+  
+  # Calcular el coste total de la campaña
+  
+    coste_total <- clientes_oferta * I2 * AR2
+  
+  # Calcular el número de retenciones
+  
+    if ("Yes" %in% churn_pred && "Yes" %in% colnames(confusion_matrix) && "Yes" %in% rownames(confusion_matrix)) {
+    
+      retenciones <- confusion_matrix["Yes","Yes"]
+  } 
+    else {
+    
+      retenciones <- 0
+  }
+  
+  # Calcular las pérdidas
+  
+    perdidas <- confusion_matrix[1,2] * R1
+  
+  # Calcular el rendimiento de la campaña
+  
+    rendimiento <- retenciones * R1 - coste_total - perdidas
+  
+  # Almacenar los resultados en el vector correspondiente
+  
+    resultados2[i, "Coste_Total"] <- coste_total
+  
+    resultados2[i, "Retenciones"] <- retenciones
+  
+    resultados2[i, "Perdidas"] <- perdidas
+  
+    resultados2[i, "Rendimiento"] <- rendimiento
+  
+}
+```
+
+```{r}
+# Encontrar el umbral óptimo y el beneficio correspondiente
+umbral_optimo_1 <- umbral[which.max(resultados1[, "Rendimiento"])]
+
+beneficio_optimo_1 <- max(resultados1[, "Rendimiento"])
+
+cat("El umbral óptimo para el escenario 1 es:", umbral_optimo_1, "\n")
+
+cat("El beneficio óptimo para el escenario 1 es:", beneficio_optimo_1, "Euros\n") 
+```
+
+```{r}
+# Encontrar el umbral óptimo y el beneficio correspondiente
+umbral_optimo_2 <- umbral[which.max(resultados2[, "Rendimiento"])]
+
+beneficio_optimo_2 <- max(resultados2[, "Rendimiento"])
+
+cat("El umbral óptimo para el escenario 2 es:", umbral_optimo_2, "\n")
+
+cat("El beneficio óptimo para el escenario 2 es:", beneficio_optimo_2, "Euros\n")  
+```
